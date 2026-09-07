@@ -42,7 +42,8 @@ protected:
 	string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id) override;
 	string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                             FileListType file_list_type, const string &metadata_table_prefix,
+	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
+	                             const string &metadata_table_prefix,
 	                             const FileColumnStatsCTEBodyGenerator &generate_cte_body) override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;

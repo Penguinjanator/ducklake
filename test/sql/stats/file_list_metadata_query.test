@@ -187,3 +187,67 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
     ELSE true END
 ----
 true
+
+# Prefix-range stats and Top-N ordering can require different columns in the same file list.
+statement ok
+SET threads=1
+
+statement ok
+SET dynamic_or_filter_threshold=0
+
+statement ok
+SET disabled_optimizers='join_order,build_side_probe_side,compressed_materialization'
+
+statement ok
+CREATE TABLE runtime_probe(k BIGINT, score BIGINT)
+
+statement ok
+INSERT INTO runtime_probe SELECT i, 300 - i FROM range(0, 100) t(i)
+
+statement ok
+INSERT INTO runtime_probe SELECT i, 300 - i FROM range(100, 200) t(i)
+
+statement ok
+INSERT INTO runtime_probe SELECT i, 300 - i FROM range(200, 300) t(i)
+
+statement ok
+CREATE TEMP TABLE runtime_build AS SELECT unnest([0, 299])::BIGINT AS k
+
+statement ok
+CALL disable_logging()
+
+query II
+EXPLAIN ANALYZE SELECT p.score FROM runtime_probe p JOIN runtime_build b ON p.k = b.k
+ORDER BY p.score DESC LIMIT 1
+----
+analyzed_plan	<REGEX>:(?s).*PRF.*
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT p.score FROM runtime_probe p JOIN runtime_build b ON p.k = b.k
+ORDER BY p.score DESC LIMIT 1
+----
+300
+
+# Both columns must be projected by the same remote statement, with one stats CTE per column.
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+    (SELECT count(*) = 1 FROM (
+         SELECT lower(regexp_replace(query, '\s+', '', 'g')) AS query
+         FROM duckdb_logs_parsed('DuckLakeMetadata')
+     ) logs
+     WHERE query LIKE 'select*frompostgres_query(%'
+       AND query LIKE '%wheredata.table_id=4and%'
+       AND query LIKE '%col_1_stats.min_valueascol_1_stats_min_value,col_1_stats.max_valueascol_1_stats_max_value%'
+       AND query LIKE '%col_2_stats.min_valueascol_2_stats_min_value,col_2_stats.max_valueascol_2_stats_max_value%'
+       AND query LIKE '%orderbycol_2_stats.max_value::bigintdescnullslast%'
+       AND length(query) - length(replace(query, 'postgres_query', '')) = length('postgres_query')
+       AND length(query) - length(replace(query, 'wherecolumn_id=1andtable_id=4', '')) =
+           length('wherecolumn_id=1andtable_id=4')
+       AND length(query) - length(replace(query, 'wherecolumn_id=2andtable_id=4', '')) =
+           length('wherecolumn_id=2andtable_id=4'))
+    ELSE true END
+----
+true
